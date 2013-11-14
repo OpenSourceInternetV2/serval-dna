@@ -1129,7 +1129,7 @@ static int rhizome_fetch_mdp_requestblocks(struct rhizome_fetch_slot *slot)
 	   slot->write_state.file_offset,
 	   slot->bidVersion);
 
-  overlay_mdp_dispatch(&mdp,0 /* system generated */,NULL,0);
+  overlay_mdp_dispatch(&mdp, NULL);
   
   // remember when we sent the request so that we can adjust the inter-request
   // interval based on how fast the packets arrive.

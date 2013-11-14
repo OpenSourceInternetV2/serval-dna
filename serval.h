@@ -578,9 +578,6 @@ int rhizome_opendb();
 int parseCommandLine(struct cli_context *context, const char *argv0, int argc, const char *const *argv);
 
 int overlay_mdp_get_fds(struct pollfd *fds,int *fdcount,int fdmax);
-int overlay_mdp_reply_error(int sock,
-			    struct sockaddr_un *recvaddr, socklen_t recvaddrlen,
-			    int error_number,char *message);
 
 typedef uint32_t mdp_port_t;
 #define PRImdp_port_t "08" PRIx32
@@ -647,10 +644,8 @@ void keyring_release_subscriber(keyring_file *k, const sid_t *sid);
 
 /* Server-side MDP functions */
 int overlay_mdp_swap_src_dst(overlay_mdp_frame *mdp);
-int overlay_mdp_reply(int sock,struct sockaddr_un *recvaddr, socklen_t recvaddrlen,
-			  overlay_mdp_frame *mdpreply);
-int overlay_mdp_dispatch(overlay_mdp_frame *mdp,int userGeneratedFrameP,
-		     struct sockaddr_un *recvaddr, socklen_t recvaddrlen);
+struct mdp_client;
+int overlay_mdp_dispatch(overlay_mdp_frame *mdp, struct mdp_client *client);
 int overlay_mdp_encode_ports(struct overlay_buffer *plaintext, mdp_port_t dst_port, mdp_port_t src_port);
 int overlay_mdp_dnalookup_reply(const sockaddr_mdp *dstaddr, const sid_t *resolved_sidp, const char *uri, const char *did, const char *name);
 

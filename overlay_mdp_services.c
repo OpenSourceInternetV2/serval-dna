@@ -99,7 +99,7 @@ int rhizome_mdp_send_block(struct subscriber *dest, const rhizome_bid_t *bid, ui
       reply.out.payload[0]='T';
     
     // send packet
-    if (overlay_mdp_dispatch(&reply,0 /* system generated */, NULL,0))
+    if (overlay_mdp_dispatch(&reply, NULL))
       break;
   }
 
@@ -252,8 +252,7 @@ int overlay_mdp_service_echo(overlay_mdp_frame *mdp)
   mdp->packetTypeAndFlags&=~(MDP_NOCRYPT|MDP_NOSIGN);
   
   /* queue frame for delivery */
-  overlay_mdp_dispatch(mdp,0 /* system generated */,
-		       NULL,0);
+  overlay_mdp_dispatch(mdp, NULL);
   mdp->packetTypeAndFlags=preserved;
   
   /* and switch addresses back around in case the caller was planning on
@@ -343,7 +342,7 @@ static int overlay_mdp_service_trace(overlay_mdp_frame *mdp){
   mdp->out.src.sid = my_subscriber->sid;
   mdp->out.dst.sid = next->sid;
   
-  ret = overlay_mdp_dispatch(mdp, 0, NULL, 0);
+  ret = overlay_mdp_dispatch(mdp, NULL);
 end:
   ob_free(b);
   RETURN(ret);
