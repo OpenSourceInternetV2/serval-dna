@@ -369,7 +369,7 @@ static int overlay_mdp_service_manifest_requests(struct overlay_frame *frame, ov
   return 0;
 }
 
-int overlay_mdp_try_interal_services(struct overlay_frame *frame, overlay_mdp_frame *mdp)
+int overlay_mdp_try_internal_services(struct overlay_frame *frame, overlay_mdp_frame *mdp)
 {
   IN();
   switch(mdp->out.dst.port) {
