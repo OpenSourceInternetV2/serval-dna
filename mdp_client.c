@@ -34,47 +34,79 @@ int mdp_socket(void)
   return overlay_mdp_client_socket();
 }
 
-int mdp_close(int socket)
+static void mdp_unlink(int mdp_sock)
 {
-  // use the same process for closing sockets, though this will need to change once bind is implemented
-  return overlay_mdp_client_close(socket);
+  // get the socket name and unlink it from the filesystem if not abstract
+  struct sockaddr_un addr;
+  socklen_t addrlen = sizeof addr;
+  if (getsockname(mdp_sock, (struct sockaddr *)&addr, &addrlen))
+    WHYF_perror("getsockname(%d)", mdp_sock);
+  else if (addrlen > sizeof addr.sun_family && addrlen <= sizeof addr && addr.sun_path[0] != '\0') {
+    if (unlink(addr.sun_path) == -1)
+      WARNF_perror("unlink(%s)", alloca_str_toprint(addr.sun_path));
+  }
+  close(mdp_sock);
 }
 
-int mdp_send(int socket, const struct mdp_header *header, const unsigned char *payload, ssize_t len)
+int mdp_close(int socket)
+{
+  // tell the daemon to drop all bindings
+  struct mdp_header header={
+    .flags = MDP_FLAG_CLOSE,
+    .local.port = 0,
+  };
+  
+  mdp_send(socket, &header, NULL);
+  
+  // remove socket
+  mdp_unlink(socket);
+  return 0;
+}
+
+// expecting pairs of [const uint8_t *payload, size_t len] followed by a NULL
+int mdp_send(int socket, const struct mdp_header *header, ...)
 {
   struct sockaddr_un addr;
   socklen_t addrlen;
   if (make_local_sockaddr(&addr, &addrlen, "mdp.2.socket") == -1)
     return -1;
   
-  struct iovec iov[]={
-    {
-      .iov_base = (void *)header,
-      .iov_len = sizeof(struct mdp_header)
-    },
-    {
-      .iov_base = (void *)payload,
-      .iov_len = len
-    }
-  };
+  struct iovec iov[4];
+  bzero(iov, sizeof(iov));
+  iov[0].iov_base = (void *)header;
+  iov[0].iov_len = sizeof(struct mdp_header);
   
   struct msghdr hdr={
     .msg_name=&addr,
     .msg_namelen=addrlen,
     .msg_iov=iov,
-    .msg_iovlen=2,
+    .msg_iovlen=1,
   };
+  
+  va_list ap;
+  va_start(ap, header);
+  while(1){
+    const uint8_t *payload = va_arg(ap, const uint8_t *);
+    if (!payload)
+      break;
+    if (hdr.msg_iovlen>=4)
+      FATALF("Too many arguments");
+    iov[hdr.msg_iovlen].iov_base = (uint8_t *)payload;
+    iov[hdr.msg_iovlen].iov_len = va_arg(ap, size_t);
+    hdr.msg_iovlen++;
+  }
+  va_end(ap);
   
   return sendmsg(socket, &hdr, 0);
 }
 
-ssize_t mdp_recv(int socket, struct mdp_header *header, unsigned char *payload, ssize_t max_len)
+ssize_t mdp_recv(int socket, struct mdp_header *header, uint8_t *payload, ssize_t max_len)
 {
   /* Construct name of socket to receive from. */
   struct sockaddr_un mdp_addr;
   socklen_t mdp_addrlen;
   if (make_local_sockaddr(&mdp_addr, &mdp_addrlen, "mdp.2.socket") == -1)
-    return -1;
+    return WHY("Failed to build socket address");
   
   struct sockaddr_un addr;
   struct iovec iov[]={
@@ -97,7 +129,7 @@ ssize_t mdp_recv(int socket, struct mdp_header *header, unsigned char *payload, 
   
   ssize_t len = recvmsg(socket, &hdr, 0);
   if (len<sizeof(struct mdp_header))
-    return -1;
+    return WHYF("Received message is too short (%d)", (int)len);
   
   // double check that the incoming address matches the servald daemon
   if (cmp_sockaddr((struct sockaddr *)&addr, hdr.msg_namelen, (struct sockaddr *)&mdp_addr, mdp_addrlen) != 0
@@ -106,8 +138,9 @@ ssize_t mdp_recv(int socket, struct mdp_header *header, unsigned char *payload, 
 	  || cmp_sockaddr((struct sockaddr *)&addr, hdr.msg_namelen, (struct sockaddr *)&mdp_addr, mdp_addrlen) != 0
 	 )
   )
-    return -1;
-  
+    return WHYF("Received message came from %s instead of %s?",
+      alloca_sockaddr(&addr, hdr.msg_namelen),
+      alloca_sockaddr(&mdp_addr, mdp_addrlen));
   return len - sizeof(struct mdp_header);
 }
 
@@ -200,16 +233,8 @@ int overlay_mdp_client_close(int mdp_sockfd)
   overlay_mdp_frame mdp;
   mdp.packetTypeAndFlags = MDP_GOODBYE;
   overlay_mdp_send(mdp_sockfd, &mdp, 0, 0);
-  // get the socket name and unlink it from the filesystem if not abstract
-  struct sockaddr_un addr;
-  socklen_t addrlen = sizeof addr;
-  if (getsockname(mdp_sockfd, (struct sockaddr *)&addr, &addrlen))
-    WHYF_perror("getsockname(%d)", mdp_sockfd);
-  else if (addrlen > sizeof addr.sun_family && addrlen <= sizeof addr && addr.sun_path[0] != '\0') {
-    if (unlink(addr.sun_path) == -1)
-      WARNF_perror("unlink(%s)", alloca_str_toprint(addr.sun_path));
-  }
-  close(mdp_sockfd);
+  
+  mdp_unlink(mdp_sockfd);
   return 0;
 }
 
