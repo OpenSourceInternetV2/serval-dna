@@ -27,6 +27,7 @@
 #include "overlay_address.h"
 #include "overlay_packet.h"
 #include "mdp_client.h"
+#include "socket.h"
 
 int mdp_socket(void)
 {
@@ -37,13 +38,15 @@ int mdp_socket(void)
 static void mdp_unlink(int mdp_sock)
 {
   // get the socket name and unlink it from the filesystem if not abstract
-  struct sockaddr_un addr;
-  socklen_t addrlen = sizeof addr;
-  if (getsockname(mdp_sock, (struct sockaddr *)&addr, &addrlen))
+  struct socket_address addr;
+  addr.addrlen = sizeof addr.store;
+  if (getsockname(mdp_sock, &addr.addr, &addr.addrlen))
     WHYF_perror("getsockname(%d)", mdp_sock);
-  else if (addrlen > sizeof addr.sun_family && addrlen <= sizeof addr && addr.sun_path[0] != '\0') {
-    if (unlink(addr.sun_path) == -1)
-      WARNF_perror("unlink(%s)", alloca_str_toprint(addr.sun_path));
+  else if (addr.addr.sa_family==AF_UNIX 
+    && addr.addrlen > sizeof addr.addr_un.sun_family 
+    && addr.addrlen <= sizeof addr.addr_un && addr.addr_un.sun_path[0] != '\0') {
+    if (unlink(addr.addr_un.sun_path) == -1)
+      WARNF_perror("unlink(%s)", alloca_str_toprint(addr.addr_un.sun_path));
   }
   close(mdp_sock);
 }
@@ -56,59 +59,46 @@ int mdp_close(int socket)
     .local.port = 0,
   };
   
-  mdp_send(socket, &header, NULL);
+  mdp_send(socket, &header, NULL, 0);
   
   // remove socket
   mdp_unlink(socket);
   return 0;
 }
 
-// expecting pairs of [const uint8_t *payload, size_t len] followed by a NULL
-int mdp_send(int socket, const struct mdp_header *header, ...)
+int mdp_send(int socket, const struct mdp_header *header, const uint8_t *payload, size_t len)
 {
-  struct sockaddr_un addr;
-  socklen_t addrlen;
-  if (make_local_sockaddr(&addr, &addrlen, "mdp.2.socket") == -1)
+  struct socket_address addr;
+  if (make_local_sockaddr(&addr, "mdp.2.socket") == -1)
     return -1;
   
-  struct iovec iov[4];
-  bzero(iov, sizeof(iov));
-  iov[0].iov_base = (void *)header;
-  iov[0].iov_len = sizeof(struct mdp_header);
-  
-  struct msghdr hdr={
-    .msg_name=&addr,
-    .msg_namelen=addrlen,
-    .msg_iov=iov,
-    .msg_iovlen=1,
+  struct fragmented_data data={
+    .fragment_count=2,
+    .iov={
+      {
+	.iov_base = (void*)header,
+	.iov_len = sizeof(struct mdp_header)
+      },
+      {
+	.iov_base = (void*)payload,
+	.iov_len = len
+      }
+    }
   };
   
-  va_list ap;
-  va_start(ap, header);
-  while(1){
-    const uint8_t *payload = va_arg(ap, const uint8_t *);
-    if (!payload)
-      break;
-    if (hdr.msg_iovlen>=4)
-      FATALF("Too many arguments");
-    iov[hdr.msg_iovlen].iov_base = (uint8_t *)payload;
-    iov[hdr.msg_iovlen].iov_len = va_arg(ap, size_t);
-    hdr.msg_iovlen++;
-  }
-  va_end(ap);
   
-  return sendmsg(socket, &hdr, 0);
+  return send_message(socket, &addr, &data);
 }
 
 ssize_t mdp_recv(int socket, struct mdp_header *header, uint8_t *payload, ssize_t max_len)
 {
   /* Construct name of socket to receive from. */
-  struct sockaddr_un mdp_addr;
-  socklen_t mdp_addrlen;
-  if (make_local_sockaddr(&mdp_addr, &mdp_addrlen, "mdp.2.socket") == -1)
+  errno=0;
+  struct socket_address mdp_addr;
+  if (make_local_sockaddr(&mdp_addr, "mdp.2.socket") == -1)
     return WHY("Failed to build socket address");
   
-  struct sockaddr_un addr;
+  struct socket_address addr;
   struct iovec iov[]={
     {
       .iov_base = (void *)header,
@@ -121,8 +111,8 @@ ssize_t mdp_recv(int socket, struct mdp_header *header, uint8_t *payload, ssize_
   };
   
   struct msghdr hdr={
-    .msg_name=&addr,
-    .msg_namelen=sizeof(struct sockaddr_un),
+    .msg_name=&addr.addr,
+    .msg_namelen=sizeof(addr.store),
     .msg_iov=iov,
     .msg_iovlen=2,
   };
@@ -130,17 +120,17 @@ ssize_t mdp_recv(int socket, struct mdp_header *header, uint8_t *payload, ssize_
   ssize_t len = recvmsg(socket, &hdr, 0);
   if (len<sizeof(struct mdp_header))
     return WHYF("Received message is too short (%d)", (int)len);
-  
+  addr.addrlen=hdr.msg_namelen;
   // double check that the incoming address matches the servald daemon
-  if (cmp_sockaddr((struct sockaddr *)&addr, hdr.msg_namelen, (struct sockaddr *)&mdp_addr, mdp_addrlen) != 0
-      && (   addr.sun_family != AF_UNIX
-	  || real_sockaddr(&addr, hdr.msg_namelen, &addr, &hdr.msg_namelen) <= 0
-	  || cmp_sockaddr((struct sockaddr *)&addr, hdr.msg_namelen, (struct sockaddr *)&mdp_addr, mdp_addrlen) != 0
+  if (cmp_sockaddr(&addr, &mdp_addr) != 0
+      && (   addr.addr_un.sun_family != AF_UNIX
+	  || real_sockaddr(&addr, &addr) <= 0
+	  || cmp_sockaddr(&addr, &mdp_addr) != 0
 	 )
   )
     return WHYF("Received message came from %s instead of %s?",
-      alloca_sockaddr(&addr, hdr.msg_namelen),
-      alloca_sockaddr(&mdp_addr, mdp_addrlen));
+      alloca_socket_address(&addr),
+      alloca_socket_address(&mdp_addr));
   return len - sizeof(struct mdp_header);
 }
 
@@ -158,13 +148,12 @@ int overlay_mdp_send(int mdp_sockfd, overlay_mdp_frame *mdp, int flags, int time
   if (len < 0)
     return WHY("MDP frame invalid (could not compute length)");
   /* Construct name of socket to send to. */
-  struct sockaddr_un addr;
-  socklen_t addrlen;
-  if (make_local_sockaddr(&addr, &addrlen, "mdp.socket") == -1)
+  struct socket_address addr;
+  if (make_local_sockaddr(&addr, "mdp.socket") == -1)
     return -1;
   // Send to that socket
   set_nonblock(mdp_sockfd);
-  int result = sendto(mdp_sockfd, mdp, len, 0, (struct sockaddr *)&addr, addrlen);
+  int result = sendto(mdp_sockfd, mdp, len, 0, &addr.addr, addr.addrlen);
   set_block(mdp_sockfd);
   if (result == -1) {
     mdp->packetTypeAndFlags=MDP_ERROR;
@@ -210,16 +199,15 @@ int overlay_mdp_client_socket(void)
 {
   /* Create local per-client socket to MDP server (connection is always local) */
   int mdp_sockfd;
-  struct sockaddr_un addr;
-  socklen_t addrlen;
+  struct socket_address addr;
   uint32_t random_value;
   if (urandombytes((unsigned char *)&random_value, sizeof random_value) == -1)
     return WHY("urandombytes() failed");
-  if (make_local_sockaddr(&addr, &addrlen, "mdp.client.%u.%08lx.socket", getpid(), (unsigned long)random_value) == -1)
+  if (make_local_sockaddr(&addr, "mdp.client.%u.%08lx.socket", getpid(), (unsigned long)random_value) == -1)
     return -1;
   if ((mdp_sockfd = esocket(AF_UNIX, SOCK_DGRAM, 0)) == -1)
     return -1;
-  if (socket_bind(mdp_sockfd, (struct sockaddr *)&addr, addrlen) == -1) {
+  if (socket_bind(mdp_sockfd, &addr.addr, addr.addrlen) == -1) {
     close(mdp_sockfd);
     return -1;
   }
@@ -257,36 +245,35 @@ int overlay_mdp_client_poll(int mdp_sockfd, time_ms_t timeout_ms)
 int overlay_mdp_recv(int mdp_sockfd, overlay_mdp_frame *mdp, mdp_port_t port, int *ttl)
 {
   /* Construct name of socket to receive from. */
-  struct sockaddr_un mdp_addr;
-  socklen_t mdp_addrlen;
-  if (make_local_sockaddr(&mdp_addr, &mdp_addrlen, "mdp.socket") == -1)
+  struct socket_address mdp_addr;
+  if (make_local_sockaddr(&mdp_addr, "mdp.socket") == -1)
     return -1;
   
   /* Check if reply available */
-  struct sockaddr_un recvaddr;
-  socklen_t recvaddrlen = sizeof recvaddr;
+  struct socket_address recvaddr;
+  recvaddr.addrlen = sizeof recvaddr.store;
   ssize_t len;
   mdp->packetTypeAndFlags = 0;
   set_nonblock(mdp_sockfd);
-  len = recvwithttl(mdp_sockfd, (unsigned char *)mdp, sizeof(overlay_mdp_frame), ttl, (struct sockaddr *)&recvaddr, &recvaddrlen);
+  len = recvwithttl(mdp_sockfd, (unsigned char *)mdp, sizeof(overlay_mdp_frame), ttl, &recvaddr.addr, &recvaddr.addrlen);
   set_block(mdp_sockfd);
   if (len <= 0)
     return -1; // no packet received
 
   // If the received address overflowed the buffer, then it cannot have come from the server, whose
   // address must always fit within a struct sockaddr_un.
-  if (recvaddrlen > sizeof recvaddr)
+  if (recvaddr.addrlen > sizeof recvaddr.store)
     return WHY("reply did not come from server: address overrun");
 
   // Compare the address of the sender with the address of our server, to ensure they are the same.
   // If the comparison fails, then try using realpath(3) on the sender address and compare again.
-  if (	cmp_sockaddr((struct sockaddr *)&recvaddr, recvaddrlen, (struct sockaddr *)&mdp_addr, mdp_addrlen) != 0
-      && (   recvaddr.sun_family != AF_UNIX
-	  || real_sockaddr(&recvaddr, recvaddrlen, &recvaddr, &recvaddrlen) <= 0
-	  || cmp_sockaddr((struct sockaddr *)&recvaddr, recvaddrlen, (struct sockaddr *)&mdp_addr, mdp_addrlen) != 0
+  if (	cmp_sockaddr(&recvaddr, &mdp_addr) != 0
+      && (   recvaddr.addr_un.sun_family != AF_UNIX
+	  || real_sockaddr(&recvaddr, &recvaddr) <= 0
+	  || cmp_sockaddr(&recvaddr, &mdp_addr) != 0
 	 )
   )
-    return WHYF("reply did not come from server: %s", alloca_sockaddr(&recvaddr, recvaddrlen));
+    return WHYF("reply did not come from server: %s", alloca_socket_address(&recvaddr));
   
   // silently drop incoming packets for the wrong port number
   if (port>0 && port != mdp->in.dst.port){

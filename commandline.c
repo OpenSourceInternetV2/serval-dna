@@ -976,7 +976,7 @@ int app_mdp_ping(const struct cli_parsed *parsed, struct cli_context *context)
       *seq=sequence_number;
       write_uint64(&payload[4], gettime_ms());
       
-      int r = mdp_send(mdp_sockfd, &mdp_header, payload, sizeof(payload), NULL);
+      int r = mdp_send(mdp_sockfd, &mdp_header, payload, sizeof(payload));
       if (r<0)
 	WHY_perror("mdp_send");
       else
@@ -2075,7 +2075,7 @@ static int handle_pins(const struct cli_parsed *parsed, struct cli_context *cont
     len+=sizeof(sid);
   }
   
-  if (!mdp_send(mdp_sock, &header, payload, len, NULL)){
+  if (!mdp_send(mdp_sock, &header, payload, len)){
     WHY_perror("mdp_send");
     goto end;
   }

@@ -29,6 +29,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include "overlay_packet.h"
 #include "mdp_client.h"
 #include "crypto.h"
+#include "socket.h"
 
 static void overlay_mdp_poll(struct sched_ent *alarm);
 static void mdp_poll2(struct sched_ent *alarm);
@@ -78,23 +79,22 @@ static void overlay_mdp_clean_socket_files()
 
 static int mdp_bind_socket(const char *name)
 {
-  struct sockaddr_un addr;
-  socklen_t addrlen;
+  struct socket_address addr;
   int sock;
   
-  if (make_local_sockaddr(&addr, &addrlen, "%s", name) == -1)
+  if (make_local_sockaddr(&addr, "%s", name) == -1)
     return -1;
-  if ((sock = esocket(AF_UNIX, SOCK_DGRAM, 0)) == -1)
+  if ((sock = esocket(addr.addr.sa_family, SOCK_DGRAM, 0)) == -1)
     return -1;
   if (socket_set_reuseaddr(sock, 1) == -1)
     WARN("Could not set socket to reuse addresses");
-  if (socket_bind(sock, (struct sockaddr *)&addr, addrlen) == -1) {
+  if (socket_bind(sock, &addr.addr, addr.addrlen) == -1) {
     close(sock);
     return -1;
   }
   socket_set_rcvbufsize(sock, 64 * 1024);
   
-  INFOF("Socket %s: fd=%d %s", name, sock, alloca_sockaddr(&addr, addrlen));
+  INFOF("Socket %s: fd=%d %s", name, sock, alloca_socket_address(&addr));
   return sock;
 }
 
@@ -151,10 +151,10 @@ static int overlay_mdp_reply(int sock, struct socket_address *client,
 
   errno=0;
   int r=sendto(sock,(char *)mdpreply,replylen,0,
-	       (struct sockaddr *)&client->addr, client->addrlen);
+	       &client->addr, client->addrlen);
   if (r<replylen) { 
-    WHY_perror("sendto(d)"); 
-    return WHYF("sendto() failed when sending MDP reply, sock=%d, r=%d", sock, r); 
+    return WHYF_perror("sendto(%d, %p, %d, 0, %s, %d)", 
+      sock, mdpreply, (int)replylen, alloca_socket_address(client), (int)client->addrlen);
   } else
     if (0) DEBUGF("reply of %d bytes sent",r);
   return 0;  
@@ -1358,7 +1358,7 @@ static void mdp_poll2(struct sched_ent *alarm)
     
     struct msghdr hdr={
       .msg_name=&client.addr,
-      .msg_namelen=sizeof(client.addr),
+      .msg_namelen=sizeof(client.store),
       .msg_iov=iov,
       .msg_iovlen=2,
     };
@@ -1385,7 +1385,7 @@ static void overlay_mdp_poll(struct sched_ent *alarm)
     unsigned char buffer[16384];
     int ttl;
     struct socket_address client;
-    client.addrlen=sizeof(client.addr);
+    client.addrlen=sizeof(client.store);
 
     ttl=-1;
     

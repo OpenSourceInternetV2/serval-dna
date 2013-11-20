@@ -36,6 +36,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <sys/uio.h>
 #include "http_server.h"
 #include "strbuf_helpers.h"
+#include "socket.h"
 
 static inline strbuf _toprint(strbuf sb, char c)
 {
@@ -362,6 +363,11 @@ strbuf strbuf_append_sockaddr(strbuf sb, const struct sockaddr *addr, socklen_t 
     break;
   }
   return sb;
+}
+
+strbuf strbuf_append_socket_address(strbuf sb, const struct socket_address *addr)
+{
+  return strbuf_append_sockaddr(sb, &addr->addr, addr->addrlen);
 }
 
 strbuf strbuf_append_strftime(strbuf sb, const char *format, const struct tm *tm)

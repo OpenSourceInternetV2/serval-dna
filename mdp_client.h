@@ -21,11 +21,6 @@
 
 #include "serval.h"
 
-struct socket_address{
-  struct sockaddr_storage addr;
-  socklen_t addrlen;
-};
-
 // define 3rd party mdp API without any structure padding
 #pragma pack(push, 1)
 
@@ -82,7 +77,7 @@ struct overlay_mdp_scan{
 /* low level V2 mdp interface */
 int mdp_socket(void);
 int mdp_close(int socket);
-int mdp_send(int socket, const struct mdp_header *header, ...);
+int mdp_send(int socket, const struct mdp_header *header, const uint8_t *payload, size_t len);
 ssize_t mdp_recv(int socket, struct mdp_header *header, uint8_t *payload, ssize_t max_len);
 int mdp_poll(int socket, time_ms_t timeout_ms);
 
